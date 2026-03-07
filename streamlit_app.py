@@ -232,14 +232,30 @@ class TCOResult:
 # ============================================
 
 @st.cache_data
-def load_vehicle_database(use_sync: bool = False) -> Tuple[List[Dict], int, int]:
+def load_vehicle_database(use_sync: bool = True) -> Tuple[List[Dict], int, int]:
     """Load comprehensive vehicle database.
 
-    If `use_sync` is True, attempts to merge in entries from
-    `evdb_sync.json`.  Returned tuple is
-    `(vehicles_list, added_count, skipped_count)`.
+    Attempts to load from `evdb_sync.json` (scraped data) first.
+    Falls back to hardcoded data if sync file not available or empty.
+    Returned tuple is `(vehicles_list, added_count, skipped_count)`.
     """
     
+    # Try to load from evdb_sync.json first (data from evdb_scraper.py)
+    vehicles_data = []
+    added = 0
+    skipped = 0
+    
+    try:
+        with open("evdb_sync.json", "r", encoding="utf-8") as f:
+            sync_data = json.load(f)
+        if sync_data and len(sync_data) > 0:
+            vehicles_data = sync_data
+            print(f"✓ Loaded {len(vehicles_data)} vehicles from evdb_sync.json")
+            return vehicles_data, added, skipped
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    
+    # Fallback: use hardcoded database
     vehicles_data = [
         # ===== TESLA =====
         {"id": "tesla_model_3_sr", "name": "Tesla Model 3 Standard Range", "brand": "Tesla",
@@ -963,27 +979,6 @@ def load_vehicle_database(use_sync: bool = False) -> Tuple[List[Dict], int, int]
          "v2l_capable": False, "v2h_capable": False, "frunk_liters": 0},
     ]
     
-    # If requested, merge in synchronization data
-    added = 0
-    skipped = 0
-    if use_sync:
-        try:
-            with open("evdb_sync.json", "r", encoding="utf-8") as f:
-                sync_list = json.load(f)
-            existing_names = {v.get("name", "").strip().lower() for v in vehicles_data}
-            for entry in sync_list:
-                name = entry.get("name", "").strip()
-                if not name:
-                    continue
-                if name.lower() in existing_names:
-                    skipped += 1
-                    continue
-                vehicles_data.append(entry)
-                existing_names.add(name.lower())
-                added += 1
-        except FileNotFoundError:
-            # sync file simply isn't present; ignore
-            pass
     return vehicles_data, added, skipped
 
 
@@ -2195,17 +2190,20 @@ def main():
     with st.sidebar:
         st.header("⚙️ Your Preferences")
         
-        # Live database option
-        use_sync = st.checkbox("Use live EVDB data (evdb_sync.json)", value=False,
-                              help="Merge scraped data from ev-database.org into the local list")
-        # load the vehicles immediately so that any subsequent widgets (brand list etc.)
-        # can access the correct dataset
-        vehicles_data, added_sync, skipped_sync = load_vehicle_database(use_sync)
-        if use_sync:
-            if added_sync:
-                st.sidebar.success(f"Imported {added_sync} vehicles from evdb_sync.json")
-            if skipped_sync:
-                st.sidebar.info(f"Skipped {skipped_sync} duplicate names from sync")
+        # Load database (prioritizes evdb_sync.json from scraper)
+        vehicles_data, _, _ = load_vehicle_database()
+        
+        # Display data source
+        try:
+            with open("evdb_sync.json", "r") as f:
+                sync_check = json.load(f)
+            if sync_check and len(sync_check) > 0:
+                st.sidebar.info(f"📊 Using {len(vehicles_data)} vehicles from ev-database.org scraper")
+            else:
+                st.sidebar.info(f"📊 Using {len(vehicles_data)} built-in vehicles")
+        except:
+            st.sidebar.info(f"📊 Using {len(vehicles_data)} built-in vehicles")
+        
         # any duplicate detection can also run here if desired
         name_counts = Counter(v.get('name','').strip().lower() for v in vehicles_data)
         duplicates = {n:cnt for n,cnt in name_counts.items() if cnt > 1}
